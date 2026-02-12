@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -14,9 +15,10 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
-# === НАСТРОЙКИ ===
-API_TOKEN = "TOKEN"
-ADMINS = [ADMIN]
+# === НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+API_TOKEN = os.getenv("BOT_TOKEN")
+MY_USER_ID = int(os.getenv("MY_USER_ID", "7753983073"))
+ADMINS = [int(x) for x in os.getenv("ADMINS", "7753983073,1414261920").split(",")]
 DATA_FILE = Path("data.json")
 LOG_FILE = Path("bot.log")
 
@@ -24,6 +26,10 @@ bot: Optional[Bot] = None
 file_lock = asyncio.Lock()
 spam_protection = {}
 COOLDOWN_TIME = 300
+
+# Проверка переменных
+if not API_TOKEN:
+    raise ValueError("❌ Установи BOT_TOKEN в переменных окружения!")
 
 # Логирование
 logging.basicConfig(
@@ -380,7 +386,7 @@ async def finish_and_send(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
     
-    await message.answer("✅ <b>Спасибо! Заявка отправлена админам + в группу</b>", 
+    await message.answer("✅ <b>Спасибо! Ваше обращение принято</b>", 
                         reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
     await state.clear()
 
@@ -445,7 +451,3 @@ if __name__ == "__main__":
         print("🛑 Остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
-
-
-
-
