@@ -15,8 +15,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
 # === НАСТРОЙКИ ===
-API_TOKEN = "TOKEN"
-ADMINS = [ADMIN]
+API_TOKEN = "$TOKEN"
+ADMINS = [$ADMIN]
 DATA_FILE = Path("data.json")
 LOG_FILE = Path("bot.log")
 
@@ -445,5 +445,6 @@ if __name__ == "__main__":
         print("🛑 Остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
 
 
