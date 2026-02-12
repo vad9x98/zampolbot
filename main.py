@@ -15,7 +15,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
 # === НАСТРОЙКИ ===
-API_TOKEN = "8359372242:AAE1o4pHjFEHnnMsplqbSHAmOVbQQi-ub2A"
+API_TOKEN = "TOKEN"
 ADMINS = [7753983073, 1414261920]
 GROUP_CHAT_ID = -1003728047688
 DATA_FILE = Path("data.json")
@@ -446,3 +446,4 @@ if __name__ == "__main__":
         print("🛑 Остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
