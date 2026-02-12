@@ -16,8 +16,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKey
 
 # === НАСТРОЙКИ ===
 API_TOKEN = "TOKEN"
-ADMINS = [7753983073, 1414261920]
-GROUP_CHAT_ID = -1003728047688
+ADMINS = [ADMIN]
 DATA_FILE = Path("data.json")
 LOG_FILE = Path("bot.log")
 
@@ -446,4 +445,5 @@ if __name__ == "__main__":
         print("🛑 Остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
 
