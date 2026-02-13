@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -62,6 +63,28 @@ def validate_fio(fio: str) -> tuple[bool, str]:
     if any(len(part) < 3 or not part.replace(' ', '').isalpha() for part in parts):
         return False, "Каждая часть минимум 3 буквы, только буквы"
     return True, ""
+
+
+def validate_personal_number(personal: str) -> tuple[bool, str]:
+    """Валидация личного номера: 1-2 буквы - 6 цифр (А-123456, АБ-123456)"""
+    pattern = r'^[А-Я]{1,2}-[0-9]{6}$'
+    if re.match(pattern, personal.upper()):
+        return True, ""
+    return False, "Неверный формат! Введите в правильном формате: А-123456 или АБ-123456"
+
+
+def validate_military_unit(unit: str) -> tuple[bool, str]:
+    """Валидация в/ч: ровно 5 цифр"""
+    if re.match(r'^\d{5}$', unit):
+        return True, ""
+    return False, "В/ч должна содержать ровно 5 цифр! Пример: 12345"
+
+
+def validate_text_length(text: str, min_length: int = 30) -> tuple[bool, str]:
+    """Валидация длины текста (минимум символов)"""
+    if len(text.strip()) >= min_length:
+        return True, ""
+    return False, "Опишите подробнее ситуацию"
 
 
 def norm_yes_no(text: str) -> Optional[bool]:
@@ -133,7 +156,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
 
 async def handle_restart_button(message: Message, state: FSMContext):
-    """Обработка кнопки 'Отправить заявку заново'"""
+    """Обработка кнопок /start"""
     if message.text == "📤 Отправить заявку заново":
         await cmd_start(message, state)
         return
@@ -151,18 +174,32 @@ async def process_full_name(message: Message, state: FSMContext):
         return
     
     await state.update_data(full_name=fio)
-    await message.answer("🏛️ Укажите воинскую часть (в/ч)", reply_markup=ReplyKeyboardRemove())
+    await message.answer("🏛️ <b>Укажите воинскую часть (в/ч)</b>\n<i>Только 5 цифр! Пример: 12345</i>", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Survey.military_unit)
 
 
 async def process_military_unit(message: Message, state: FSMContext):
-    await state.update_data(military_unit=message.text.strip())
-    await message.answer("🆔 Укажите личный номер", reply_markup=ReplyKeyboardRemove())
+    unit = message.text.strip()
+    valid, error = validate_military_unit(unit)
+    
+    if not valid:
+        await message.answer(f"❌ {error}\n\n<i>Пример: 12345</i>", reply_markup=main_kb())
+        return
+    
+    await state.update_data(military_unit=unit)
+    await message.answer("🆔 <b>Укажите личный номер</b>\n<i>Формат: А-123456 или АБ-123456</i>", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Survey.personal_number)
 
 
 async def process_personal_number(message: Message, state: FSMContext):
-    await state.update_data(personal_number=message.text.strip())
+    personal = message.text.strip()
+    valid, error = validate_personal_number(personal)
+    
+    if not valid:
+        await message.answer(f"❌ {error}\n\n<i>Примеры: А-123456, АБ-123456</i>", reply_markup=main_kb())
+        return
+    
+    await state.update_data(personal_number=personal)
     await message.answer("🏠 Укажите этаж и палата/кровать\nПример: 2 этаж, палата 15 / кровать 3", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Survey.room)
 
@@ -185,12 +222,19 @@ async def process_military_id(message: Message, state: FSMContext):
         await message.answer("📋 Есть ли у вас УВБД?", reply_markup=yes_no_kb())
         await state.set_state(Survey.uvbd)
     else:
-        await message.answer("При каких обстоятельствах утерян военный билет?", reply_markup=ReplyKeyboardRemove())
+        await message.answer("📝 <b>Опишите подробно ситуацию, при которой Вы утеряли военный билет</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.lost_military_id_reason)
 
 
 async def process_lost_military_id(message: Message, state: FSMContext):
-    await state.update_data(lost_military_id_reason=message.text.strip())
+    text = message.text.strip()
+    valid, error = validate_text_length(text)
+    
+    if not valid:
+        await message.answer(f"❌ {error}. Опишите подробнее ситуацию, при которой Вы утеряли военный билет:", reply_markup=main_kb())
+        return
+    
+    await state.update_data(lost_military_id_reason=text)
     await message.answer("📋 Есть ли у вас УВБД?", reply_markup=yes_no_kb())
     await state.set_state(Survey.uvbd)
 
@@ -216,12 +260,19 @@ async def process_salary(message: Message, state: FSMContext):
         await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
         await state.set_state(Survey.contract_payments)
     else:
-        await message.answer("💰 <b>Укажите какой вид денежного довольствия и за какой период вы НЕ получали</b>", reply_markup=ReplyKeyboardRemove())
+        await message.answer("💰 <b>Опишите подробно, какой вид денежного довольствия и за какой период Вы НЕ получали</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.salary_problems)
 
 
 async def process_salary_problems(message: Message, state: FSMContext):
-    await state.update_data(salary_problems=message.text.strip())
+    text = message.text.strip()
+    valid, error = validate_text_length(text)
+    
+    if not valid:
+        await message.answer(f"❌ {error}. Опишите подробно проблемы с денежным довольствием:", reply_markup=main_kb())
+        return
+    
+    await state.update_data(salary_problems=text)
     await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.contract_payments)
 
@@ -238,12 +289,19 @@ async def process_contract_payments(message: Message, state: FSMContext):
         await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
         await state.set_state(Survey.more_questions)
     else:
-        await message.answer("💸 <b>С какими выплатами возникли проблемы (региональные / федеральные)?</b>", reply_markup=ReplyKeyboardRemove())
+        await message.answer("💸 <b>Опишите подробно, с какими выплатами возникли проблемы (региональные / федеральные)</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.contract_problems)
 
 
 async def process_contract_problems(message: Message, state: FSMContext):
-    await state.update_data(contract_problems=message.text.strip())
+    text = message.text.strip()
+    valid, error = validate_text_length(text)
+    
+    if not valid:
+        await message.answer(f"❌ {error}. Опишите подробно проблемы с выплатами:", reply_markup=main_kb())
+        return
+    
+    await state.update_data(contract_problems=text)
     kb = yes_no_kb()
     await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
     await state.set_state(Survey.more_questions)
@@ -264,7 +322,14 @@ async def process_more_questions(message: Message, state: FSMContext):
 
 
 async def process_more_questions_details(message: Message, state: FSMContext):
-    await state.update_data(more_questions_details=message.text.strip())
+    text = message.text.strip()
+    valid, error = validate_text_length(text)
+    
+    if not valid:
+        await message.answer(f"❌ {error}. Опишите подробнее какие вопросы:", reply_markup=main_kb())
+        return
+    
+    await state.update_data(more_questions_details=text)
     await finish_and_send(message, state)
 
 
