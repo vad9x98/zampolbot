@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -24,7 +24,7 @@ LOG_FILE = Path("bot.log")
 bot: Optional[Bot] = None
 file_lock = asyncio.Lock()
 spam_protection = {}
-COOLDOWN_TIME = 300
+COOLDOWN_TIME = 3600  # 1 час = 60 минут
 
 # Логирование
 logging.basicConfig(
@@ -79,9 +79,26 @@ def is_spam(user_id: int) -> tuple[bool, str]:
     if user_id in spam_protection:
         if now - spam_protection[user_id] < COOLDOWN_TIME:
             remaining = COOLDOWN_TIME - (now - spam_protection[user_id])
-            return True, f"⏳ Подожди {remaining:.0f} сек (5 мин между заявками)"
+            minutes = int(remaining / 60)
+            return True, f"⏳ Подожди {minutes} мин"
     spam_protection[user_id] = now
     return False, ""
+
+
+def main_kb():
+    """Клавиатура с кнопкой /start"""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🚀 Начать заявку")]],
+        resize_keyboard=True
+    )
+
+
+def restart_kb():
+    """Клавиатура с кнопкой 'Отправить заявку заново'"""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📤 Отправить заявку заново")]],
+        resize_keyboard=True
+    )
 
 
 def yes_no_kb():
@@ -99,7 +116,7 @@ async def cmd_start(message: Message, state: FSMContext):
     
     is_spam_flag, spam_msg = is_spam(user_id)
     if is_spam_flag:
-        await message.answer(spam_msg)
+        await message.answer(spam_msg, reply_markup=main_kb())
         return
     
     await state.clear()
@@ -115,28 +132,38 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(Survey.full_name)
 
 
+async def handle_restart_button(message: Message, state: FSMContext):
+    """Обработка кнопки 'Отправить заявку заново'"""
+    if message.text == "📤 Отправить заявку заново":
+        await cmd_start(message, state)
+        return
+    if message.text == "🚀 Начать заявку":
+        await cmd_start(message, state)
+        return
+
+
 async def process_full_name(message: Message, state: FSMContext):
     fio = message.text.strip()
     valid, error = validate_fio(fio)
     
     if not valid:
-        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:", reply_markup=main_kb())
         return
     
     await state.update_data(full_name=fio)
-    await message.answer("🏛️ Укажите воинскую часть (в/ч)")
+    await message.answer("🏛️ Укажите воинскую часть (в/ч)", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Survey.military_unit)
 
 
 async def process_military_unit(message: Message, state: FSMContext):
     await state.update_data(military_unit=message.text.strip())
-    await message.answer("🆔 Укажите личный номер")
+    await message.answer("🆔 Укажите личный номер", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Survey.personal_number)
 
 
 async def process_personal_number(message: Message, state: FSMContext):
     await state.update_data(personal_number=message.text.strip())
-    await message.answer("🏠 Укажите этаж и палата/кровать\nПример: 2 этаж, палата 15 / кровать 3")
+    await message.answer("🏠 Укажите этаж и палата/кровать\nПример: 2 этаж, палата 15 / кровать 3", reply_markup=ReplyKeyboardRemove())
     await state.set_state(Survey.room)
 
 
@@ -149,7 +176,7 @@ async def process_room(message: Message, state: FSMContext):
 async def process_military_id(message: Message, state: FSMContext):
     ans = norm_yes_no(message.text)
     if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет", reply_markup=yes_no_kb())
         return
     
     await state.update_data(military_id="✅ Да" if ans else "❌ Нет")
@@ -158,7 +185,7 @@ async def process_military_id(message: Message, state: FSMContext):
         await message.answer("📋 Есть ли у вас УВБД?", reply_markup=yes_no_kb())
         await state.set_state(Survey.uvbd)
     else:
-        await message.answer("При каких обстоятельствах утерян военный билет?")
+        await message.answer("При каких обстоятельствах утерян военный билет?", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.lost_military_id_reason)
 
 
@@ -171,38 +198,38 @@ async def process_lost_military_id(message: Message, state: FSMContext):
 async def process_uvbd(message: Message, state: FSMContext):
     ans = norm_yes_no(message.text)
     if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет", reply_markup=yes_no_kb())
         return
     await state.update_data(uvbd="✅ Да" if ans else "❌ Нет")
-    await message.answer("💰 <b>Получаешь ли ты денежное довольствие в полном объеме?</b>", reply_markup=yes_no_kb())
+    await message.answer("💰 <b>Получаете ли Вы денежное довольствие в полном объеме?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.salary)
 
 
 async def process_salary(message: Message, state: FSMContext):
     ans = norm_yes_no(message.text)
     if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет", reply_markup=yes_no_kb())
         return
     await state.update_data(salary="✅ Да" if ans else "❌ Нет")
     
     if ans:
-        await message.answer("💸 <b>Получил ли ты выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
+        await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
         await state.set_state(Survey.contract_payments)
     else:
-        await message.answer("💰 <b>Укажите какой вид денежного довольствия и за какой период вы НЕ получали</b>")
+        await message.answer("💰 <b>Укажите какой вид денежного довольствия и за какой период вы НЕ получали</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.salary_problems)
 
 
 async def process_salary_problems(message: Message, state: FSMContext):
     await state.update_data(salary_problems=message.text.strip())
-    await message.answer("💸 <b>Получил ли ты выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
+    await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.contract_payments)
 
 
 async def process_contract_payments(message: Message, state: FSMContext):
     ans = norm_yes_no(message.text)
     if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет", reply_markup=yes_no_kb())
         return
     await state.update_data(contract_payments="✅ Да" if ans else "❌ Нет")
     
@@ -211,7 +238,7 @@ async def process_contract_payments(message: Message, state: FSMContext):
         await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
         await state.set_state(Survey.more_questions)
     else:
-        await message.answer("💸 <b>С какими выплатами возникли проблемы (региональные / федеральные)?</b>")
+        await message.answer("💸 <b>С какими выплатами возникли проблемы (региональные / федеральные)?</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.contract_problems)
 
 
@@ -225,7 +252,7 @@ async def process_contract_problems(message: Message, state: FSMContext):
 async def process_more_questions(message: Message, state: FSMContext):
     ans = norm_yes_no(message.text)
     if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет", reply_markup=yes_no_kb())
         return
     await state.update_data(more_questions="✅ Да" if ans else "❌ Нет")
     
@@ -244,10 +271,10 @@ async def process_more_questions_details(message: Message, state: FSMContext):
 async def cmd_cancel(message: Message, state: FSMContext):
     cur_state = await state.get_state()
     if cur_state is None:
-        await message.answer("Нечего отменять. /start — начать", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Нечего отменять. Нажмите кнопку ниже:", reply_markup=main_kb())
         return
     await state.clear()
-    await message.answer("✅ Отменено. /start — начать заново", reply_markup=ReplyKeyboardRemove())
+    await message.answer("✅ Отменено. Нажмите кнопку ниже:", reply_markup=main_kb())
 
 
 async def cmd_help(message: Message):
@@ -268,11 +295,12 @@ async def cmd_help(message: Message):
 /cancel — отменить
 /help — помощь"""
     
-    await message.answer(help_text, parse_mode=ParseMode.HTML)
+    await message.answer(help_text, reply_markup=main_kb(), parse_mode=ParseMode.HTML)
 
 
 async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ только админам", reply_markup=main_kb())
         return
     async with file_lock:
         try:
@@ -281,28 +309,30 @@ async def cmd_stats(message: Message):
                     data = json.load(f)
                 count = len(data)
                 latest = data[-1]["timestamp"] if data else "нет"
-                await message.answer(f"📊 <b>Статистика:</b>\nВсего заявок: {count}\nПоследняя: {latest}", parse_mode=ParseMode.HTML)
+                await message.answer(f"📊 <b>Статистика:</b>\nВсего заявок: {count}\nПоследняя: {latest}", reply_markup=main_kb(), parse_mode=ParseMode.HTML)
             else:
-                await message.answer("📊 Заявок: 0")
+                await message.answer("📊 Заявок: 0", reply_markup=main_kb())
         except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
+            await message.answer(f"❌ Ошибка: {e}", reply_markup=main_kb())
 
 
 async def cmd_clear(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ только админам", reply_markup=main_kb())
         return
     if DATA_FILE.exists():
         DATA_FILE.unlink()
-        await message.answer("🗑️ <b>База очищена</b>", parse_mode=ParseMode.HTML)
+        await message.answer("🗑️ <b>База очищена</b>", reply_markup=main_kb(), parse_mode=ParseMode.HTML)
     else:
-        await message.answer("База пуста")
+        await message.answer("База пуста", reply_markup=main_kb())
 
 
 async def cmd_broadcast(message: Message):
     if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ только админам", reply_markup=main_kb())
         return
     if len(message.text.split()) < 2:
-        await message.answer("❌ /broadcast ТЕКСТ_СООБЩЕНИЯ")
+        await message.answer("❌ /broadcast ТЕКСТ_СООБЩЕНИЯ", reply_markup=main_kb())
         return
     
     text = message.text.replace("/broadcast ", "", 1)
@@ -315,7 +345,7 @@ async def cmd_broadcast(message: Message):
         except:
             pass
     
-    await message.answer(f"✅ Отправлено {sent}/{len(ADMINS)} админам")
+    await message.answer(f"✅ Отправлено {sent}/{len(ADMINS)} админам", reply_markup=main_kb())
 
 
 async def finish_and_send(message: Message, state: FSMContext):
@@ -381,8 +411,12 @@ async def finish_and_send(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
     
-    await message.answer("✅ <b>Спасибо! Заявка отправлена админам + в группу</b>", 
-                        reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await message.answer(
+        "✅ <b>Спасибо! Ваша заявка будет рассмотрена в ближайшее время</b>\n\n"
+        "Нажмите кнопку ниже для новой заявки:",
+        reply_markup=restart_kb(),
+        parse_mode=ParseMode.HTML
+    )
     await state.clear()
 
 
@@ -412,7 +446,7 @@ async def main():
     bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
     
-    # Регистрация
+    # Регистрация команд
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_cancel, Command("cancel"))
     dp.message.register(cmd_help, Command("help"))
@@ -420,6 +454,10 @@ async def main():
     dp.message.register(cmd_clear, Command("clear"))
     dp.message.register(cmd_broadcast, Command("broadcast"))
     
+    # Обработка кнопок /start
+    dp.message.register(handle_restart_button, F.text.in_(["🚀 Начать заявку", "📤 Отправить заявку заново"]))
+    
+    # Регистрация состояний
     dp.message.register(process_full_name, StateFilter(Survey.full_name))
     dp.message.register(process_military_unit, StateFilter(Survey.military_unit))
     dp.message.register(process_personal_number, StateFilter(Survey.personal_number))
