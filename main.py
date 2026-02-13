@@ -51,7 +51,7 @@ class Survey(StatesGroup):
     room = State()
     military_id = State()
     lost_military_id_reason = State()
-    veteran_certificate = State()  # ✅ ИЗМЕНЕНО: было uvbd
+    veteran_certificate = State()  
     salary = State()
     salary_problems = State()
     contract_payments = State()
@@ -246,12 +246,10 @@ async def process_lost_military_id_reason(message: Message, state: FSMContext):
         return
     
     await state.update_data(lost_military_id_reason=message.text.strip())
-    # ✅ ИЗМЕНЕНО: новый вопрос про удостоверение ветерана
     await message.answer("🎖️ <b>Имеете ли вы удостоверение ветерана боевых действий?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.veteran_certificate)
 
 
-# ✅ ИЗМЕНЕНО: новый обработчик для удостоверения ветерана (было process_uvbd)
 async def process_veteran_certificate(message: Message, state: FSMContext):
     yes_no = norm_yes_no(message.text)
     if yes_no is None:
@@ -259,7 +257,7 @@ async def process_veteran_certificate(message: Message, state: FSMContext):
         return
     
     await state.update_data(veteran_certificate="✅ Да" if yes_no else "❌ Нет")
-    await message.answer("💰 <b>Получаете ли денежное довольствие вовремя?</b>", reply_markup=yes_no_kb())
+    await message.answer("💰 <b>Вовремя ли Вы получаете денежное довольствие?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.salary)
 
 
@@ -273,16 +271,16 @@ async def process_salary(message: Message, state: FSMContext):
     await state.update_data(salary=salary_text)
     
     if not yes_no:
-        await message.answer("⚠️ <b>Опишите проблемы с зарплатой</b>", reply_markup=ReplyKeyboardRemove())
+        await message.answer("⚠️ <b>Опишите проблемы с выплатами</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.salary_problems)
     else:
-        await message.answer("💸 <b>Получаете ли выплаты после подписания контракта?</b>", reply_markup=yes_no_kb())
+        await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта?</b>", reply_markup=yes_no_kb())
         await state.set_state(Survey.contract_payments)
 
 
 async def process_salary_problems(message: Message, state: FSMContext):
     if not validate_text_length(message.text)[0]:
-        await message.answer("❌ Опишите подробнее проблемы с зарплатой:")
+        await message.answer("❌ Опишите подробнее проблемы с выплатами:")
         return
     
     await state.update_data(salary_problems=message.text.strip())
@@ -474,7 +472,7 @@ async def cmd_export_excel(message: Message):
             
             fieldnames = [
                 "Номер", "Дата", "ФИО", "В/Ч", "Личный номер", "Комната",
-                "Военный билет", "Причина утраты", "Удостоверение ВБД", "Зарплата", "Проблемы зарплаты",  # ✅ ИЗМЕНЕНО
+                "Военный билет", "Причина утраты", "Удостоверение ВБД", "Зарплата", "Проблемы зарплаты", 
                 "Выплаты контракт", "Проблемы выплат", "Другие вопросы", "Детали вопросов",
                 "User ID", "Username"
             ]
@@ -493,7 +491,7 @@ async def cmd_export_excel(message: Message):
                         "Комната": record.get("room", ""),
                         "Военный билет": record.get("military_id", ""),
                         "Причина утраты": record.get("lost_military_id_reason", ""),
-                        "Удостоверение ВБД": record.get("veteran_certificate", ""),  # ✅ ИЗМЕНЕНО
+                        "Удостоверение ВБД": record.get("veteran_certificate", ""),  
                         "Зарплата": record.get("salary", ""),
                         "Проблемы зарплаты": record.get("salary_problems", ""),
                         "Выплаты контракт": record.get("contract_payments", ""),
@@ -592,7 +590,7 @@ async def finish_and_send(message: Message, state: FSMContext):
         "room": data.get("room"),
         "military_id": data.get("military_id"),
         "lost_military_id_reason": data.get("lost_military_id_reason"),
-        "veteran_certificate": data.get("veteran_certificate"),  # ✅ ИЗМЕНЕНО: было uvbd
+        "veteran_certificate": data.get("veteran_certificate"),  
         "salary": data.get("salary"),
         "salary_problems": data.get("salary_problems"),
         "contract_payments": data.get("contract_payments"),
@@ -614,8 +612,7 @@ async def finish_and_send(message: Message, state: FSMContext):
 📄 <b>Военный билет:</b> {record['military_id']}
 {'' if record['military_id'] == '✅ Да' else f"📝 <b>Причина утраты:</b> {record['lost_military_id_reason']}"}
 
-🎖️ <b>Удостоверение ВБД:</b> {record['veteran_certificate']}  # ✅ ИЗМЕНЕНО
-
+🎖️ <b>Удостоверение ВБД:</b> {record['veteran_certificate']}  
 💰 <b>Денежное довольствие:</b> {record['salary']}
 {'' if record['salary'] == '✅ Да' else f"⚠️ <b>Проблемы:</b> {record['salary_problems']}"}
 
@@ -700,7 +697,7 @@ async def main():
     dp.message.register(process_room, StateFilter(Survey.room))
     dp.message.register(process_military_id, StateFilter(Survey.military_id))
     dp.message.register(process_lost_military_id_reason, StateFilter(Survey.lost_military_id_reason))
-    dp.message.register(process_veteran_certificate, StateFilter(Survey.veteran_certificate))  # ✅ ИЗМЕНЕНО
+    dp.message.register(process_veteran_certificate, StateFilter(Survey.veteran_certificate))  
     dp.message.register(process_salary, StateFilter(Survey.salary))
     dp.message.register(process_salary_problems, StateFilter(Survey.salary_problems))
     dp.message.register(process_contract_payments, StateFilter(Survey.contract_payments))
