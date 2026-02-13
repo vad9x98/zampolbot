@@ -51,7 +51,7 @@ class Survey(StatesGroup):
     room = State()
     military_id = State()
     lost_military_id_reason = State()
-    uvbd = State()
+    veteran_certificate = State()  # ✅ ИЗМЕНЕНО: было uvbd
     salary = State()
     salary_problems = State()
     contract_payments = State()
@@ -109,7 +109,7 @@ def validate_personal_number(personal: str) -> tuple[bool, str]:
 
 
 def validate_military_unit(unit: str) -> tuple[bool, str]:
-    if re.match(r'^\d{5}$', unit):
+    if re.match(r'^\d{5}$', unit):  # ИСПРАВЛЕНО: убрал лишний \\
         return True, ""
     return False, "В/ч должна содержать ровно 5 цифр! Пример: 12345"
 
@@ -139,7 +139,7 @@ def is_spam(user_id: int) -> tuple[bool, str]:
         if now - spam_protection[user_id] < COOLDOWN_TIME:
             remaining = COOLDOWN_TIME - (now - spam_protection[user_id])
             minutes = int(remaining / 60)
-            return True, f"⏳ Подожди {minutes} мин"
+            return True, f"⏳ Подождите {minutes} мин, прежде чем оставить новую заявку"
     spam_protection[user_id] = now
     return False, ""
 
@@ -174,6 +174,169 @@ def yes_no_kb():
         keyboard=[[KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")]],
         resize_keyboard=True, one_time_keyboard=True
     )
+
+
+# ✅ ВСЕ НЕДОСТАЮЩИЕ ОБРАБОТЧИКИ СОСТОЯНИЙ
+async def process_full_name(message: Message, state: FSMContext):
+    fio = message.text.strip()
+    valid, error = validate_fio(fio)
+    
+    if not valid:
+        kb = admin_kb() if is_admin(message.from_user.id) else main_kb()
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:", reply_markup=kb)
+        return
+    
+    await state.update_data(full_name=fio)
+    await message.answer("🏛️ <b>Укажите воинскую часть (в/ч)</b>\n<i>Только 5 цифр! Пример: 12345</i>", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Survey.military_unit)
+
+
+async def process_military_unit(message: Message, state: FSMContext):
+    unit = message.text.strip()
+    valid, error = validate_military_unit(unit)
+    
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+    
+    await state.update_data(military_unit=unit)
+    await message.answer("🆔 <b>Укажите личный номер</b>\n<i>Формат: А-123456 или АБ-123456</i>", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Survey.personal_number)
+
+
+async def process_personal_number(message: Message, state: FSMContext):
+    personal = message.text.strip()
+    valid, error = validate_personal_number(personal)
+    
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+    
+    await state.update_data(personal_number=personal)
+    await message.answer("🏠 <b>Укажите комнату (этаж/палата)</b>\n<i>Пример: 3/15</i>", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(Survey.room)
+
+
+async def process_room(message: Message, state: FSMContext):
+    await state.update_data(room=message.text.strip())
+    await message.answer("📄 <b>Есть ли у вас военный билет?</b>", reply_markup=yes_no_kb())
+    await state.set_state(Survey.military_id)
+
+
+async def process_military_id(message: Message, state: FSMContext):
+    yes_no = norm_yes_no(message.text)
+    if yes_no is None:
+        await message.answer("❌ Выберите <b>✅ Да</b> или <b>❌ Нет</b>", reply_markup=yes_no_kb())
+        return
+    
+    military_id_text = "✅ Да" if yes_no else "❌ Нет"
+    await state.update_data(military_id=military_id_text)
+    
+    if not yes_no:
+        await message.answer("📝 <b>Укажите причину утраты военного билета</b>", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(Survey.lost_military_id_reason)
+    else:
+        # ✅ ИЗМЕНЕНО: новый вопрос про удостоверение ветерана
+        await message.answer("🎖️ <b>Имеете ли вы удостоверение ветерана боевых действий?</b>", reply_markup=yes_no_kb())
+        await state.set_state(Survey.veteran_certificate)
+
+
+async def process_lost_military_id_reason(message: Message, state: FSMContext):
+    if not validate_text_length(message.text)[0]:
+        await message.answer("❌ Опишите подробнее причину утраты:")
+        return
+    
+    await state.update_data(lost_military_id_reason=message.text.strip())
+    # ✅ ИЗМЕНЕНО: новый вопрос про удостоверение ветерана
+    await message.answer("🎖️ <b>Имеете ли вы удостоверение ветерана боевых действий?</b>", reply_markup=yes_no_kb())
+    await state.set_state(Survey.veteran_certificate)
+
+
+# ✅ ИЗМЕНЕНО: новый обработчик для удостоверения ветерана (было process_uvbd)
+async def process_veteran_certificate(message: Message, state: FSMContext):
+    yes_no = norm_yes_no(message.text)
+    if yes_no is None:
+        await message.answer("❌ Выберите <b>✅ Да</b> или <b>❌ Нет</b>", reply_markup=yes_no_kb())
+        return
+    
+    await state.update_data(veteran_certificate="✅ Да" if yes_no else "❌ Нет")
+    await message.answer("💰 <b>Получаете ли денежное довольствие вовремя?</b>", reply_markup=yes_no_kb())
+    await state.set_state(Survey.salary)
+
+
+async def process_salary(message: Message, state: FSMContext):
+    yes_no = norm_yes_no(message.text)
+    if yes_no is None:
+        await message.answer("❌ Выберите <b>✅ Да</b> или <b>❌ Нет</b>", reply_markup=yes_no_kb())
+        return
+    
+    salary_text = "✅ Да" if yes_no else "❌ Нет"
+    await state.update_data(salary=salary_text)
+    
+    if not yes_no:
+        await message.answer("⚠️ <b>Опишите проблемы с зарплатой</b>", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(Survey.salary_problems)
+    else:
+        await message.answer("💸 <b>Получаете ли выплаты после подписания контракта?</b>", reply_markup=yes_no_kb())
+        await state.set_state(Survey.contract_payments)
+
+
+async def process_salary_problems(message: Message, state: FSMContext):
+    if not validate_text_length(message.text)[0]:
+        await message.answer("❌ Опишите подробнее проблемы с зарплатой:")
+        return
+    
+    await state.update_data(salary_problems=message.text.strip())
+    await message.answer("💸 <b>Получаете ли выплаты после подписания контракта?</b>", reply_markup=yes_no_kb())
+    await state.set_state(Survey.contract_payments)
+
+
+async def process_contract_payments(message: Message, state: FSMContext):
+    yes_no = norm_yes_no(message.text)
+    if yes_no is None:
+        await message.answer("❌ Выберите <b>✅ Да</b> или <b>❌ Нет</b>", reply_markup=yes_no_kb())
+        return
+    
+    contract_text = "✅ Да" if yes_no else "❌ Нет"
+    await state.update_data(contract_payments=contract_text)
+    
+    if not yes_no:
+        await message.answer("🔧 <b>Опишите проблемы с выплатами по контракту</b>", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(Survey.contract_problems)
+    else:
+        await message.answer("❓ <b>Имеются ли еще проблемные вопросы?</b>", reply_markup=yes_no_kb())
+        await state.set_state(Survey.more_questions)
+
+
+async def process_contract_problems(message: Message, state: FSMContext):
+    if not validate_text_length(message.text)[0]:
+        await message.answer("❌ Опишите подробнее проблемы с выплатами:")
+        return
+    
+    await state.update_data(contract_problems=message.text.strip())
+    await message.answer("❓ <b>Имеются ли еще проблемные вопросы?</b>", reply_markup=yes_no_kb())
+    await state.set_state(Survey.more_questions)
+
+
+async def process_more_questions(message: Message, state: FSMContext):
+    yes_no = norm_yes_no(message.text)
+    if yes_no is None:
+        await message.answer("❌ Выберите <b>✅ Да</b> или <b>❌ Нет</b>", reply_markup=yes_no_kb())
+        return
+    
+    more_text = "✅ Да" if yes_no else "❌ Нет"
+    await state.update_data(more_questions=more_text)
+    
+    if yes_no:
+        await message.answer("📝 <b>Опишите другие проблемные вопросы</b>", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(Survey.more_questions_details)
+    else:
+        await finish_and_send(message, state)
+
+
+async def process_more_questions_details(message: Message, state: FSMContext):
+    await state.update_data(more_questions_details=message.text.strip())
+    await finish_and_send(message, state)
 
 
 async def cmd_start(message: Message, state: FSMContext):
@@ -223,25 +386,6 @@ async def handle_admin_buttons(message: Message):
         await message.answer("👤 Введите ID пользователя для блокировки:\n<code>/block 123456789</code>", reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
     elif message.text == "✅ Разблокировать":
         await message.answer("👤 Введите ID пользователя для разблокировки:\n<code>/unblock 123456789</code>", reply_markup=admin_kb(), parse_mode=ParseMode.HTML)
-
-
-# ... (все функции process_* остаются такими же, как в предыдущей версии) ...
-
-async def process_full_name(message: Message, state: FSMContext):
-    fio = message.text.strip()
-    valid, error = validate_fio(fio)
-    
-    if not valid:
-        kb = admin_kb() if is_admin(message.from_user.id) else main_kb()
-        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:", reply_markup=kb)
-        return
-    
-    await state.update_data(full_name=fio)
-    await message.answer("🏛️ <b>Укажите воинскую часть (в/ч)</b>\n<i>Только 5 цифр! Пример: 12345</i>", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(Survey.military_unit)
-
-# Вставьте сюда все остальные process_* функции из предыдущей версии без изменений
-# process_military_unit, process_personal_number, process_room, etc.
 
 
 async def cmd_cancel(message: Message, state: FSMContext):
@@ -331,7 +475,7 @@ async def cmd_export_excel(message: Message):
             
             fieldnames = [
                 "Номер", "Дата", "ФИО", "В/Ч", "Личный номер", "Комната",
-                "Военный билет", "Причина утраты", "УВБД", "Зарплата", "Проблемы зарплаты",
+                "Военный билет", "Причина утраты", "Удостоверение ВБД", "Зарплата", "Проблемы зарплаты",  # ✅ ИЗМЕНЕНО
                 "Выплаты контракт", "Проблемы выплат", "Другие вопросы", "Детали вопросов",
                 "User ID", "Username"
             ]
@@ -350,7 +494,7 @@ async def cmd_export_excel(message: Message):
                         "Комната": record.get("room", ""),
                         "Военный билет": record.get("military_id", ""),
                         "Причина утраты": record.get("lost_military_id_reason", ""),
-                        "УВБД": record.get("uvbd", ""),
+                        "Удостоверение ВБД": record.get("veteran_certificate", ""),  # ✅ ИЗМЕНЕНО
                         "Зарплата": record.get("salary", ""),
                         "Проблемы зарплаты": record.get("salary_problems", ""),
                         "Выплаты контракт": record.get("contract_payments", ""),
@@ -449,7 +593,7 @@ async def finish_and_send(message: Message, state: FSMContext):
         "room": data.get("room"),
         "military_id": data.get("military_id"),
         "lost_military_id_reason": data.get("lost_military_id_reason"),
-        "uvbd": data.get("uvbd"),
+        "veteran_certificate": data.get("veteran_certificate"),  # ✅ ИЗМЕНЕНО: было uvbd
         "salary": data.get("salary"),
         "salary_problems": data.get("salary_problems"),
         "contract_payments": data.get("contract_payments"),
@@ -471,7 +615,7 @@ async def finish_and_send(message: Message, state: FSMContext):
 📄 <b>Военный билет:</b> {record['military_id']}
 {'' if record['military_id'] == '✅ Да' else f"📝 <b>Причина утраты:</b> {record['lost_military_id_reason']}"}
 
-📋 <b>УВБД:</b> {record['uvbd']}
+🎖️ <b>Удостоверение ВБД:</b> {record['veteran_certificate']}  # ✅ ИЗМЕНЕНО
 
 💰 <b>Денежное довольствие:</b> {record['salary']}
 {'' if record['salary'] == '✅ Да' else f"⚠️ <b>Проблемы:</b> {record['salary_problems']}"}
@@ -534,7 +678,8 @@ async def main():
     bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
     
-    # Регистрация команд
+    # ✅ РЕГИСТРАЦИЯ ВСЕХ ОБРАБОТЧИКОВ
+    # Команды
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_cancel, Command("cancel"))
     dp.message.register(cmd_help, Command("help"))
@@ -545,11 +690,24 @@ async def main():
     dp.message.register(cmd_clear, Command("clear"))
     dp.message.register(cmd_broadcast, Command("broadcast"))
     
-    # Обработка кнопок
+    # Кнопки
     dp.message.register(handle_restart_button, F.text.in_(["🚀 Начать заявку", "📤 Отправить заявку заново"]))
     dp.message.register(handle_admin_buttons, F.text.in_(["📊 Статистика", "📈 Экспорт Excel", "🚫 Блокировать", "✅ Разблокировать"]))
     
-    # Регистрация состояний опроса (добавьте все process_* функции)
+    # ✅ СОСТОЯНИЯ ОПРОСА - ОБНОВЛЕНО!
+    dp.message.register(process_full_name, StateFilter(Survey.full_name))
+    dp.message.register(process_military_unit, StateFilter(Survey.military_unit))
+    dp.message.register(process_personal_number, StateFilter(Survey.personal_number))
+    dp.message.register(process_room, StateFilter(Survey.room))
+    dp.message.register(process_military_id, StateFilter(Survey.military_id))
+    dp.message.register(process_lost_military_id_reason, StateFilter(Survey.lost_military_id_reason))
+    dp.message.register(process_veteran_certificate, StateFilter(Survey.veteran_certificate))  # ✅ ИЗМЕНЕНО
+    dp.message.register(process_salary, StateFilter(Survey.salary))
+    dp.message.register(process_salary_problems, StateFilter(Survey.salary_problems))
+    dp.message.register(process_contract_payments, StateFilter(Survey.contract_payments))
+    dp.message.register(process_contract_problems, StateFilter(Survey.contract_problems))
+    dp.message.register(process_more_questions, StateFilter(Survey.more_questions))
+    dp.message.register(process_more_questions_details, StateFilter(Survey.more_questions_details))
     
     logger.info("🚀 Бот запущен!")
     print("🚀 Бот запущен! Админы:", ADMINS)
