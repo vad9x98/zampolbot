@@ -236,7 +236,6 @@ async def process_military_id(message: Message, state: FSMContext):
         await message.answer("📝 <b>Укажите причину утраты военного билета</b>", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.lost_military_id_reason)
     else:
-        # ✅ ИЗМЕНЕНО: новый вопрос про удостоверение ветерана
         await message.answer("🎖️ <b>Имеете ли вы удостоверение ветерана боевых действий?</b>", reply_markup=yes_no_kb())
         await state.set_state(Survey.veteran_certificate)
 
@@ -287,7 +286,7 @@ async def process_salary_problems(message: Message, state: FSMContext):
         return
     
     await state.update_data(salary_problems=message.text.strip())
-    await message.answer("💸 <b>Получаете ли выплаты после подписания контракта?</b>", reply_markup=yes_no_kb())
+    await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.contract_payments)
 
 
