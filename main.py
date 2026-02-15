@@ -204,6 +204,12 @@ async def process_military_unit(message: Message, state: FSMContext):
     await state.set_state(Survey.personal_number)
 
 
+
+
+async def process_company(message: Message, state: FSMContext):
+    await state.update_data(company=message.text.strip())
+    await message.answer("📋 <b>Введите личный номер</b>\n\n<i>Формат: Л-123456 или Р-123456</i>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await state.set_state(Survey.personalnumber)
 async def process_personal_number(message: Message, state: FSMContext):
     personal = message.text.strip()
     valid, error = validate_personal_number(personal)
@@ -333,9 +339,15 @@ async def process_more_questions(message: Message, state: FSMContext):
 
 async def process_more_questions_details(message: Message, state: FSMContext):
     await state.update_data(more_questions_details=message.text.strip())
+    await message.answer("📞 <b>Номер телефона для связи</b>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+    await state.set_state(Survey.phone)
+
+
+
+
+async def process_phone(message: Message, state: FSMContext):
+    await state.update_data(phone=message.text.strip())
     await finish_and_send(message, state)
-
-
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     
