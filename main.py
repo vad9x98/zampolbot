@@ -17,7 +17,6 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKey
 # === НАСТРОЙКИ ===
 API_TOKEN = "8359372242:AAE1o4pHjFEHnnMsplqbSHAmOVbQQi-ub2A"
 ADMINS = [7753983073, 1414261920]
-GROUP_CHAT_ID = -1003728047688
 DATA_FILE = Path("data.json")
 LOG_FILE = Path("bot.log")
 
@@ -38,7 +37,7 @@ logger = logging.getLogger(__name__)
 class Survey(StatesGroup):
     full_name = State()
     military_unit = State()
-    company_battalion = State()  # НОВЫЙ
+    company_battalion = State()
     personal_number = State()
     room = State()
     military_id = State()
@@ -50,7 +49,7 @@ class Survey(StatesGroup):
     contract_problems = State()
     more_questions = State()
     more_questions_details = State()
-    phone_number = State()  # НОВЫЙ
+    phone_number = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -132,11 +131,11 @@ async def process_full_name(message: Message, state: FSMContext):
 
 async def process_military_unit(message: Message, state: FSMContext):
     await state.update_data(military_unit=message.text.strip())
-    await message.answer("🪖 Ваша рота / батальон ?")
+    await message.answer("Ваша рота / батальон ?")
     await state.set_state(Survey.company_battalion)
 
 
-async def process_company_battalion(message: Message, state: FSMContext):  # НОВЫЙ ОБРАБОТЧИК
+async def process_company_battalion(message: Message, state: FSMContext):
     await state.update_data(company_battalion=message.text.strip())
     await message.answer("🆔 Укажите личный номер")
     await state.set_state(Survey.personal_number)
@@ -144,13 +143,13 @@ async def process_company_battalion(message: Message, state: FSMContext):  # Н�
 
 async def process_personal_number(message: Message, state: FSMContext):
     await state.update_data(personal_number=message.text.strip())
-    await message.answer("🏠 Укажите этаж и палату/кровать\nПример: 2 этаж, палата 15 / кровать 3")
+    await message.answer("🏠 Укажите этаж и номер палаты/кровати\nПример: 2 этаж, палата 15 / кровать 3")
     await state.set_state(Survey.room)
 
 
 async def process_room(message: Message, state: FSMContext):
     await state.update_data(room=message.text.strip())
-    await message.answer("📄 Есть ли на руках военный билет?", reply_markup=yes_no_kb())
+    await message.answer("📄 Есть ли у Вас на руках военный билет?", reply_markup=yes_no_kb())
     await state.set_state(Survey.military_id)
 
 
@@ -166,7 +165,7 @@ async def process_military_id(message: Message, state: FSMContext):
         await message.answer("📋 Есть ли у Вас удостоверение ветерана боевых действий?", reply_markup=yes_no_kb())
         await state.set_state(Survey.uvbd)
     else:
-        await message.answer("При каких обстоятельствах утерян военный билет?", reply_markup=ReplyKeyboardRemove())
+        await message.answer("При каких обстоятельствах утерян военный билет?")
         await state.set_state(Survey.lost_military_id_reason)
 
 
@@ -182,7 +181,7 @@ async def process_uvbd(message: Message, state: FSMContext):
         await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
         return
     await state.update_data(uvbd="✅ Да" if ans else "❌ Нет")
-    await message.answer("💰 <b>Получаете ли Вы денежное довольствие в полном объеме?</b>", reply_markup=yes_no_kb(), parse_mode=ParseMode.HTML)
+    await message.answer("💰 <b>Получаете ли Вы денежное довольствие в полном объеме?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.salary)
 
 
@@ -194,16 +193,16 @@ async def process_salary(message: Message, state: FSMContext):
     await state.update_data(salary="✅ Да" if ans else "❌ Нет")
     
     if ans:
-        await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb(), parse_mode=ParseMode.HTML)
+        await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
         await state.set_state(Survey.contract_payments)
     else:
-        await message.answer("💰 <b>Укажите какой вид денежного довольствия и за какой период Вы НЕ получали</b>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        await message.answer("💰 <b>Укажите какой вид денежного довольствия и за какой период Вы НЕ получали</b>")
         await state.set_state(Survey.salary_problems)
 
 
 async def process_salary_problems(message: Message, state: FSMContext):
     await state.update_data(salary_problems=message.text.strip())
-    await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb(), parse_mode=ParseMode.HTML)
+    await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.contract_payments)
 
 
@@ -216,17 +215,17 @@ async def process_contract_payments(message: Message, state: FSMContext):
     
     if ans:
         kb = yes_no_kb()
-        await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb, parse_mode=ParseMode.HTML)
+        await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
         await state.set_state(Survey.more_questions)
     else:
-        await message.answer("💸 <b>С какими выплатами возникли проблемы (региональные / федеральные)?</b>", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        await message.answer("💸 <b>С какими выплатами возникли проблемы (региональные / федеральные)?</b>")
         await state.set_state(Survey.contract_problems)
 
 
 async def process_contract_problems(message: Message, state: FSMContext):
     await state.update_data(contract_problems=message.text.strip())
     kb = yes_no_kb()
-    await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb, parse_mode=ParseMode.HTML)
+    await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
     await state.set_state(Survey.more_questions)
 
 
@@ -242,17 +241,17 @@ async def process_more_questions(message: Message, state: FSMContext):
         await state.set_state(Survey.more_questions_details)
     else:
         await state.update_data(more_questions_details=None)
-        await message.answer("📞 Номер телефона для связи", reply_markup=ReplyKeyboardRemove())  # НОВЫЙ ВОПРОС
+        await message.answer("📞 Номер телефона для связи", reply_markup=ReplyKeyboardRemove())
         await state.set_state(Survey.phone_number)
 
 
 async def process_more_questions_details(message: Message, state: FSMContext):
     await state.update_data(more_questions_details=message.text.strip())
-    await message.answer("📞 Номер телефона для связи")  # НОВЫЙ ВОПРОС
+    await message.answer("📞 Номер телефона для связи")
     await state.set_state(Survey.phone_number)
 
 
-async def process_phone_number(message: Message, state: FSMContext):  # НОВЫЙ ОБРАБОТЧИК
+async def process_phone_number(message: Message, state: FSMContext):
     await state.update_data(phone_number=message.text.strip())
     await finish_and_send(message, state)
 
@@ -343,7 +342,7 @@ async def finish_and_send(message: Message, state: FSMContext):
         "username": message.from_user.username or "нет",
         "full_name": data.get("full_name"),
         "military_unit": data.get("military_unit"),
-        "company_battalion": data.get("company_battalion"),  # НОВОЕ ПОЛЕ
+        "company_battalion": data.get("company_battalion"),
         "personal_number": data.get("personal_number"),
         "room": data.get("room"),
         "military_id": data.get("military_id"),
@@ -355,7 +354,7 @@ async def finish_and_send(message: Message, state: FSMContext):
         "contract_problems": data.get("contract_problems"),
         "more_questions": data.get("more_questions"),
         "more_questions_details": data.get("more_questions_details"),
-        "phone_number": data.get("phone_number"),  # НОВОЕ ПОЛЕ
+        "phone_number": data.get("phone_number"),
         "timestamp": datetime.now().isoformat()
     }
     
@@ -365,21 +364,25 @@ async def finish_and_send(message: Message, state: FSMContext):
 
 👤 <b>ФИО:</b> {record['full_name']}
 🏛️ <b>В/Ч:</b> {record['military_unit']}
-🪖 <b>Рота/Батальон:</b> {record['company_battalion']}
+🎖️ <b>Рота/Батальон:</b> {record['company_battalion']}
 🆔 <b>Личный №:</b> {record['personal_number']}
 🏠 <b>Этаж/палата:</b> {record['room']}
 
 📄 <b>Военный билет:</b> {record['military_id']}
-{'' if record['military_id'] == '✅ Да' else f"📝 <b>Причина утраты:</b> {record['lost_military_id_reason']}\n"}
+{'' if record['military_id'] == '✅ Да' else f"📝 <b>Причина утраты:</b> {record['lost_military_id_reason']}"}
+
 📋 <b>УВБД:</b> {record['uvbd']}
 
 💰 <b>Денежное довольствие:</b> {record['salary']}
-{'' if record['salary'] == '✅ Да' else f"⚠️ <b>Проблемы:</b> {record['salary_problems']}\n"}
+{'' if record['salary'] == '✅ Да' else f"⚠️ <b>Проблемы:</b> {record['salary_problems']}"}
+
 💸 <b>Выплаты после контракта:</b> {record['contract_payments']}
-{'' if record['contract_payments'] == '✅ Да' else f"🔧 <b>Проблемы:</b> {record['contract_problems']}\n"}
+{'' if record['contract_payments'] == '✅ Да' else f"🔧 <b>Проблемы:</b> {record['contract_problems']}"}
+
 ❓ <b>Имеются ли еще проблемные вопросы:</b> {record['more_questions']}
-{f"📝 <b>Детали:</b> {record['more_questions_details']}\n" if record['more_questions_details'] else ''}
-📞 <b>Телефон для связи:</b> {record['phone_number']}
+{record['more_questions_details'] or ''}
+
+📞 <b>Телефон:</b> {record['phone_number']}
 
 🆔 <code>{record['user_id']}</code> | @{record['username']}
 ⏰ {record['timestamp']}"""
@@ -439,7 +442,7 @@ async def main():
     
     dp.message.register(process_full_name, StateFilter(Survey.full_name))
     dp.message.register(process_military_unit, StateFilter(Survey.military_unit))
-    dp.message.register(process_company_battalion, StateFilter(Survey.company_battalion))  # НОВЫЙ
+    dp.message.register(process_company_battalion, StateFilter(Survey.company_battalion))
     dp.message.register(process_personal_number, StateFilter(Survey.personal_number))
     dp.message.register(process_room, StateFilter(Survey.room))
     dp.message.register(process_military_id, StateFilter(Survey.military_id))
@@ -451,7 +454,7 @@ async def main():
     dp.message.register(process_contract_problems, StateFilter(Survey.contract_problems))
     dp.message.register(process_more_questions, StateFilter(Survey.more_questions))
     dp.message.register(process_more_questions_details, StateFilter(Survey.more_questions_details))
-    dp.message.register(process_phone_number, StateFilter(Survey.phone_number))  # НОВЫЙ
+    dp.message.register(process_phone_number, StateFilter(Survey.phone_number))
     
     logger.info("🚀 Бот запущен!")
     print("🚀 Бот запущен! Админы:", ADMINS)
