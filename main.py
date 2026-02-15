@@ -1,31 +1,38 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+import re
+import csv
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile
 
 # === НАСТРОЙКИ ===
 API_TOKEN = "8359372242:AAE1o4pHjFEHnnMsplqbSHAmOVbQQi-ub2A"
 ADMINS = [7753983073, 1414261920]
 DATA_FILE = Path("data.json")
+BLOCKED_FILE = Path("blocked.json")
 LOG_FILE = Path("bot.log")
+EXCEL_EXPORT_DIR = Path("exports")
 
 bot: Optional[Bot] = None
 file_lock = asyncio.Lock()
 spam_protection = {}
-COOLDOWN_TIME = 300
+blocked_users: Dict[int, Any] = {}
 
-# Логирование
+COOLDOWN_TIME = 3600
+
+EXCEL_EXPORT_DIR.mkdir(exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -42,7 +49,7 @@ class Survey(StatesGroup):
     room = State()
     military_id = State()
     lost_military_id_reason = State()
-    uvbd = State()
+    veteran_certificate = State()
     salary = State()
     salary_problems = State()
     contract_payments = State()
@@ -52,8 +59,34 @@ class Survey(StatesGroup):
     phone_number = State()
 
 
+class AdminStates(StatesGroup):
+    block_user = State()
+    unblock_user = State()
+
+
+def load_blocked_users():
+    global blocked_users
+    if BLOCKED_FILE.exists():
+        try:
+            with BLOCKED_FILE.open("r", encoding="utf-8") as f:
+                blocked_users = json.load(f)
+        except:
+            blocked_users = {}
+    else:
+        blocked_users = {}
+
+
+def save_blocked_users():
+    with BLOCKED_FILE.open("w", encoding="utf-8") as f:
+        json.dump(blocked_users, f, ensure_ascii=False, indent=2)
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
+
+
+def is_blocked(user_id: int) -> bool:
+    return user_id in blocked_users
 
 
 def validate_fio(fio: str) -> tuple[bool, str]:
@@ -63,6 +96,41 @@ def validate_fio(fio: str) -> tuple[bool, str]:
     if any(len(part) < 3 or not part.replace(' ', '').isalpha() for part in parts):
         return False, "Каждая часть минимум 3 буквы, только буквы"
     return True, ""
+
+
+def validate_personal_number(personal: str) -> tuple[bool, str]:
+    pattern = r'^[А-Я]{1,2}-[0-9]{6}$'
+    if re.match(pattern, personal.upper()):
+        return True, ""
+    return False, "Неверный формат! Должно быть: А-123456 или АБ-123456"
+
+
+def validate_military_unit(unit: str) -> tuple[bool, str]:
+    if re.match(r'^\d{5}$', unit):
+        return True, ""
+    return False, "В/ч должна содержать ровно 5 цифр! Пример: 12345"
+
+
+def validate_phone_number(phone: str) -> tuple[bool, str]:
+    """Валидация номера телефона в формате +7XXXXXXXXXX или 8XXXXXXXXXX"""
+    cleaned = re.sub(r'[^\d+]', '', phone)
+
+    if re.match(r'^\+7\d{10}$', cleaned):
+        return True, ""
+
+    if re.match(r'^8\d{10}$', cleaned):
+        return True, ""
+
+    if re.match(r'^7\d{10}$', cleaned):
+        return True, ""
+
+    return False, "❌ Неверный формат!\n\nДопустимые форматы:\n+79991234567\n89991234567\n79991234567"
+
+
+def validate_text_length(text: str, min_length: int = 30) -> tuple[bool, str]:
+    if len(text.strip()) >= min_length:
+        return True, ""
+    return False, "Опишите подробнее ситуацию"
 
 
 def norm_yes_no(text: str) -> Optional[bool]:
@@ -75,396 +143,609 @@ def norm_yes_no(text: str) -> Optional[bool]:
 
 
 def is_spam(user_id: int) -> tuple[bool, str]:
+    if is_blocked(user_id):
+        return True, "🚫 Вы заблокированы в боте"
+
     loop = asyncio.get_event_loop()
     now = loop.time()
     if user_id in spam_protection:
         if now - spam_protection[user_id] < COOLDOWN_TIME:
             remaining = COOLDOWN_TIME - (now - spam_protection[user_id])
-            return True, f"⏳ Подожди {remaining:.0f} сек (5 мин между заявками)"
+            minutes = int(remaining / 60)
+            return True, f"⏳ Подождите {minutes} мин"
     spam_protection[user_id] = now
     return False, ""
 
 
+def main_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🚀 Начать заявку")]],
+        resize_keyboard=True
+    )
+
+
+def restart_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📤 Отправить заявку заново")]],
+        resize_keyboard=True
+    )
+
+
+def admin_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📊 Статистика")],
+            [KeyboardButton(text="📥 Выгрузить данные")],
+            [KeyboardButton(text="🚫 Заблокировать пользователя")],
+            [KeyboardButton(text="✅ Разблокировать пользователя")],
+            [KeyboardButton(text="📋 Список заблокированных")]
+        ],
+        resize_keyboard=True
+    )
+
+
 def yes_no_kb():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")]],
-        resize_keyboard=True, one_time_keyboard=True
+        keyboard=[
+            [KeyboardButton(text="✅ Да"), KeyboardButton(text="❌ Нет")]
+        ],
+        resize_keyboard=True
     )
 
+
+async def save_data(data: dict):
+    async with file_lock:
+        records = []
+        if DATA_FILE.exists():
+            try:
+                with DATA_FILE.open("r", encoding="utf-8") as f:
+                    records = json.load(f)
+            except:
+                records = []
+        records.append(data)
+        with DATA_FILE.open("w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+
+
+# === HANDLERS ===
 
 async def cmd_start(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    
-    if await state.get_state() is not None:
-        await state.clear()
-    
-    is_spam_flag, spam_msg = is_spam(user_id)
-    if is_spam_flag:
-        await message.answer(spam_msg)
-        return
-    
     await state.clear()
-    await message.answer(
-        "🆘 <b>ПОМОЩЬ В ПРОБЛЕМНЫХ ВОПРОСАХ ВОЕННОСЛУЖАЩИХ</b>\n\n"
-        "Напишите ФИО в формате:\n"
-        "<i>Фамилия Имя Отчество</i>\n\n"
-        "Пример: Иванов Иван Иванович\n\n"
-        "<i>/cancel — отменить</i>",
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode=ParseMode.HTML
-    )
+    if is_admin(message.from_user.id):
+        await message.answer(
+            "👋 Добро пожаловать, администратор!\n\n"
+            "Выберите действие:",
+            reply_markup=admin_kb()
+        )
+    else:
+        await message.answer(
+            "👋 Добро пожаловать в бот для подачи заявок!\n\n"
+            "Нажмите кнопку ниже, чтобы начать:",
+            reply_markup=main_kb()
+        )
+
+
+async def start_survey(message: Message, state: FSMContext):
+    spam, msg = is_spam(message.from_user.id)
+    if spam:
+        await message.answer(msg)
+        return
+
     await state.set_state(Survey.full_name)
+    await message.answer(
+        "📝 Начинаем заполнение заявки\n\n"
+        "Введите ФИО (Фамилия Имя Отчество):",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 
 async def process_full_name(message: Message, state: FSMContext):
-    fio = message.text.strip()
-    valid, error = validate_fio(fio)
-    
+    valid, error = validate_fio(message.text)
     if not valid:
         await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
         return
-    
-    await state.update_data(full_name=fio)
-    await message.answer("🏛️ Укажите воинскую часть (в/ч)")
+
+    await state.update_data(full_name=message.text.strip())
     await state.set_state(Survey.military_unit)
+    await message.answer("Введите номер войсковой части (5 цифр):")
 
 
 async def process_military_unit(message: Message, state: FSMContext):
+    valid, error = validate_military_unit(message.text.strip())
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+
     await state.update_data(military_unit=message.text.strip())
-    await message.answer("Ваша рота / батальон ?")
     await state.set_state(Survey.company_battalion)
+    await message.answer("Введите вашу роту / батальон:")
 
 
 async def process_company_battalion(message: Message, state: FSMContext):
     await state.update_data(company_battalion=message.text.strip())
-    await message.answer("🆔 Укажите личный номер")
     await state.set_state(Survey.personal_number)
+    await message.answer("Введите личный номер (формат: А-123456 или АБ-123456):")
 
 
 async def process_personal_number(message: Message, state: FSMContext):
-    await state.update_data(personal_number=message.text.strip())
-    await message.answer("🏠 Укажите этаж и номер палаты/кровати\nПример: 2 этаж, палата 15 / кровать 3")
+    valid, error = validate_personal_number(message.text.strip())
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+
+    await state.update_data(personal_number=message.text.strip().upper())
     await state.set_state(Survey.room)
+    await message.answer("Введите номер этажа / комнаты / кровати:")
 
 
 async def process_room(message: Message, state: FSMContext):
     await state.update_data(room=message.text.strip())
-    await message.answer("📄 Есть ли у Вас на руках военный билет?", reply_markup=yes_no_kb())
     await state.set_state(Survey.military_id)
+    await message.answer(
+        "Имеется ли у Вас военный билет?",
+        reply_markup=yes_no_kb()
+    )
 
 
 async def process_military_id(message: Message, state: FSMContext):
-    ans = norm_yes_no(message.text)
-    if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+    answer = norm_yes_no(message.text)
+    if answer is None:
+        await message.answer("❌ Пожалуйста, выберите Да или Нет", reply_markup=yes_no_kb())
         return
-    
-    await state.update_data(military_id="✅ Да" if ans else "❌ Нет")
-    
-    if ans:
-        await message.answer("📋 Есть ли у Вас удостоверение ветерана боевых действий?", reply_markup=yes_no_kb())
-        await state.set_state(Survey.uvbd)
-    else:
-        await message.answer("При каких обстоятельствах утерян военный билет?")
+
+    await state.update_data(military_id=answer)
+
+    if not answer:
         await state.set_state(Survey.lost_military_id_reason)
+        await message.answer(
+            "Опишите причину отсутствия военного билета:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await state.set_state(Survey.veteran_certificate)
+        await message.answer(
+            "Имеется ли у Вас удостоверение ветерана боевых действий?",
+            reply_markup=yes_no_kb()
+        )
 
 
-async def process_lost_military_id(message: Message, state: FSMContext):
-    await state.update_data(lost_military_id_reason=message.text.strip())
-    await message.answer("📋 Есть ли у Вас удостоверение ветерана боевых действий?", reply_markup=yes_no_kb())
-    await state.set_state(Survey.uvbd)
-
-
-async def process_uvbd(message: Message, state: FSMContext):
-    ans = norm_yes_no(message.text)
-    if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+async def process_lost_military_id_reason(message: Message, state: FSMContext):
+    valid, error = validate_text_length(message.text, 10)
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
         return
-    await state.update_data(uvbd="✅ Да" if ans else "❌ Нет")
-    await message.answer("💰 <b>Получаете ли Вы денежное довольствие в полном объеме?</b>", reply_markup=yes_no_kb())
+
+    await state.update_data(lost_military_id_reason=message.text.strip())
+    await state.set_state(Survey.veteran_certificate)
+    await message.answer(
+        "Имеется ли у Вас удостоверение ветерана боевых действий?",
+        reply_markup=yes_no_kb()
+    )
+
+
+async def process_veteran_certificate(message: Message, state: FSMContext):
+    answer = norm_yes_no(message.text)
+    if answer is None:
+        await message.answer("❌ Пожалуйста, выберите Да или Нет", reply_markup=yes_no_kb())
+        return
+
+    await state.update_data(veteran_certificate=answer)
     await state.set_state(Survey.salary)
+    await message.answer("Выплачивается ли вам денежное довольствие?", reply_markup=yes_no_kb())
 
 
 async def process_salary(message: Message, state: FSMContext):
-    ans = norm_yes_no(message.text)
-    if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+    answer = norm_yes_no(message.text)
+    if answer is None:
+        await message.answer("❌ Пожалуйста, выберите Да или Нет", reply_markup=yes_no_kb())
         return
-    await state.update_data(salary="✅ Да" if ans else "❌ Нет")
-    
-    if ans:
-        await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
-        await state.set_state(Survey.contract_payments)
-    else:
-        await message.answer("💰 <b>Укажите какой вид денежного довольствия и за какой период Вы НЕ получали</b>")
+
+    await state.update_data(salary=answer)
+
+    if not answer:
         await state.set_state(Survey.salary_problems)
+        await message.answer(
+            "Опишите проблему с денежным довольствием:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await state.set_state(Survey.contract_payments)
+        await message.answer(
+            "Выплачены ли все выплаты за контракт (подъёмные, ежемесячные)?",
+            reply_markup=yes_no_kb()
+        )
 
 
 async def process_salary_problems(message: Message, state: FSMContext):
+    valid, error = validate_text_length(message.text, 10)
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+
     await state.update_data(salary_problems=message.text.strip())
-    await message.answer("💸 <b>Получили ли Вы выплаты после подписания контракта в полном объеме?</b>", reply_markup=yes_no_kb())
     await state.set_state(Survey.contract_payments)
+    await message.answer(
+        "Выплачены ли все выплаты за контракт (подъёмные, ежемесячные)?",
+        reply_markup=yes_no_kb()
+    )
 
 
 async def process_contract_payments(message: Message, state: FSMContext):
-    ans = norm_yes_no(message.text)
-    if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+    answer = norm_yes_no(message.text)
+    if answer is None:
+        await message.answer("❌ Пожалуйста, выберите Да или Нет", reply_markup=yes_no_kb())
         return
-    await state.update_data(contract_payments="✅ Да" if ans else "❌ Нет")
-    
-    if ans:
-        kb = yes_no_kb()
-        await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
-        await state.set_state(Survey.more_questions)
-    else:
-        await message.answer("💸 <b>С какими выплатами возникли проблемы (региональные / федеральные)?</b>")
+
+    await state.update_data(contract_payments=answer)
+
+    if not answer:
         await state.set_state(Survey.contract_problems)
+        await message.answer(
+            "Опишите проблему с выплатами:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await state.set_state(Survey.more_questions)
+        await message.answer(
+            "Остались ли у Вас ещё вопросы?",
+            reply_markup=yes_no_kb()
+        )
 
 
 async def process_contract_problems(message: Message, state: FSMContext):
+    valid, error = validate_text_length(message.text, 10)
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+
     await state.update_data(contract_problems=message.text.strip())
-    kb = yes_no_kb()
-    await message.answer("<b>Имеются ли еще какие-либо проблемные вопросы?</b>", reply_markup=kb)
     await state.set_state(Survey.more_questions)
+    await message.answer("Есть ли у Вас ещё вопросы?", reply_markup=yes_no_kb())
 
 
 async def process_more_questions(message: Message, state: FSMContext):
-    ans = norm_yes_no(message.text)
-    if ans is None:
-        await message.answer("❌ Выберите кнопку: ✅ Да / ❌ Нет")
+    answer = norm_yes_no(message.text)
+    if answer is None:
+        await message.answer("❌ Пожалуйста, выберите Да или Нет", reply_markup=yes_no_kb())
         return
-    await state.update_data(more_questions="✅ Да" if ans else "❌ Нет")
-    
-    if ans:
-        await message.answer("Какие вопросы?", reply_markup=ReplyKeyboardRemove())
+
+    await state.update_data(more_questions=answer)
+
+    if answer:
         await state.set_state(Survey.more_questions_details)
+        await message.answer(
+            "Опишите ваши вопросы:",
+            reply_markup=ReplyKeyboardRemove()
+        )
     else:
-        await state.update_data(more_questions_details=None)
-        await message.answer("📞 Номер телефона для связи", reply_markup=ReplyKeyboardRemove())
+        await state.update_data(more_questions_details="Нет")
         await state.set_state(Survey.phone_number)
+        await message.answer(
+            "Введите ваш номер телефона\n\n"
+            "Формат: +79991234567 или 89991234567",
+            reply_markup=ReplyKeyboardRemove()
+        )
 
 
 async def process_more_questions_details(message: Message, state: FSMContext):
+    valid, error = validate_text_length(message.text, 10)
+    if not valid:
+        await message.answer(f"❌ {error}\n\nПопробуйте ещё раз:")
+        return
+
     await state.update_data(more_questions_details=message.text.strip())
-    await message.answer("📞 Номер телефона для связи")
     await state.set_state(Survey.phone_number)
+    await message.answer(
+        "Введите ваш номер телефона\n\n"
+        "Формат: +79991234567 или 89991234567"
+    )
 
 
 async def process_phone_number(message: Message, state: FSMContext):
+    valid, error = validate_phone_number(message.text.strip())
+    if not valid:
+        await message.answer(f"{error}\n\nПопробуйте ещё раз:")
+        return
+
     await state.update_data(phone_number=message.text.strip())
-    await finish_and_send(message, state)
+    data = await state.get_data()
 
+    try:
+        # Экранируем все пользовательские данные
+        full_name = html.quote(data['full_name'])
+        military_unit = html.quote(data['military_unit'])
+        company_battalion = html.quote(data['company_battalion'])
+        personal_number = html.quote(data['personal_number'])
+        room = html.quote(data['room'])
+        phone_number = html.quote(data['phone_number'])
 
-async def cmd_cancel(message: Message, state: FSMContext):
-    cur_state = await state.get_state()
-    if cur_state is None:
-        await message.answer("Нечего отменять. /start — начать", reply_markup=ReplyKeyboardRemove())
-        return
+        # Формируем статусы для emoji
+        military_id_status = "✅ Да" if data['military_id'] else "❌ Нет"
+        veteran_cert_status = "✅ Да" if data['veteran_certificate'] else "❌ Нет"
+        salary_status = "✅ Выплачивается" if data['salary'] else "❌ Не выплачивается"
+        contract_status = "✅ Выплачены" if data['contract_payments'] else "❌ Не выплачены"
+        more_questions_status = "✅ Да" if data['more_questions'] else "❌ Нет"
+
+        # Формируем текст заявки
+        report = f"""📋 <b>НОВАЯ ЗАЯВКА</b>
+
+👤 <b>ФИО:</b> {full_name}
+🏢 <b>Войсковая часть:</b> {military_unit}
+🪖 <b>Рота/батальон:</b> {company_battalion}
+🆔 <b>Личный номер:</b> {personal_number}
+🚪 <b>Комната:</b> {room}
+
+📱 <b>Телефон:</b> {phone_number}
+
+📄 <b>Военный билет:</b> {military_id_status}
+"""
+
+        if not data['military_id']:
+            lost_reason = html.quote(data.get('lost_military_id_reason', 'Не указана'))
+            report += f"   └ <b>Причина:</b> {lost_reason}\n"
+
+        report += f"\n🎖 <b>Удостоверение ветерана:</b> {veteran_cert_status}\n"
+        report += f"\n💰 <b>Денежное довольствие:</b> {salary_status}\n"
+
+        if not data['salary']:
+            salary_prob = html.quote(data.get('salary_problems', 'Не указана'))
+            report += f"   └ <b>Проблема:</b> {salary_prob}\n"
+
+        report += f"\n💵 <b>Контрактные выплаты:</b> {contract_status}\n"
+
+        if not data['contract_payments']:
+            contract_prob = html.quote(data.get('contract_problems', 'Не указана'))
+            report += f"   └ <b>Проблема:</b> {contract_prob}\n"
+
+        report += f"\n❓ <b>Дополнительные вопросы:</b> {more_questions_status}\n"
+
+        if data['more_questions']:
+            more_details = html.quote(data.get('more_questions_details', 'Не указаны'))
+            report += f"   └ {more_details}\n"
+
+        username = message.from_user.username or 'Нет username'
+        report += f"\n👤 <b>От пользователя:</b> @{username} (ID: {message.from_user.id})"
+        report += f"\n📅 <b>Дата:</b> {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+
+        # Сохраняем данные
+        save_record = {
+            **data,
+            "user_id": message.from_user.id,
+            "username": message.from_user.username,
+            "timestamp": datetime.now().isoformat()
+        }
+        await save_data(save_record)
+
+        # Отправляем всем администраторам
+        logger.info(f"Отправка заявки всем администраторам: {ADMINS}")
+
+        success_count = 0
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, report, parse_mode=ParseMode.HTML)
+                success_count += 1
+                logger.info(f"Заявка успешно отправлена администратору {admin_id}")
+            except Exception as e:
+                logger.error(f"Ошибка отправки администратору {admin_id}: {e}")
+
+        if success_count > 0:
+            logger.info(f"Заявка отправлена {success_count} из {len(ADMINS)} администраторам")
+            await message.answer(
+                "✅ Ваша заявка успешно отправлена!\n\n"
+                "Спасибо за обращение. С вами свяжутся в ближайшее время.",
+                reply_markup=restart_kb()
+            )
+        else:
+            logger.error("Не удалось отправить заявку ни одному администратору")
+            await message.answer(
+                "⚠️ Заявка сохранена, но не удалось отправить уведомление администраторам.\n\n"
+                "С вами свяжутся позже.",
+                reply_markup=restart_kb()
+            )
+
+    except Exception as e:
+        logger.error(f"ОШИБКА при обработке заявки: {type(e).__name__}: {str(e)}")
+        logger.error(f"Данные заявки: {data}")
+
+        await message.answer(
+            f"❌ Произошла ошибка при обработке заявки\n\n"
+            f"Тип ошибки: {type(e).__name__}\n"
+            f"Данные сохранены. Попробуйте позже или обратитесь к администратору.",
+            reply_markup=restart_kb()
+        )
+
     await state.clear()
-    await message.answer("✅ Отменено. /start — начать заново", reply_markup=ReplyKeyboardRemove())
 
 
-async def cmd_help(message: Message):
-    user_id = message.from_user.id
-    if is_admin(user_id):
-        help_text = """📋 <b>Команды:</b>
-/start — начать заявку
-/cancel — отменить
-/help — это меню
-/stats — статистика
-/clear — очистить базу
-/broadcast — рассылка админам
+# === ADMIN HANDLERS ===
 
-<i>Заявки идут всем админам + в группу</i>"""
-    else:
-        help_text = """📋 <b>Команды:</b>
-/start — начать заявку
-/cancel — отменить
-/help — помощь"""
-    
-    await message.answer(help_text, parse_mode=ParseMode.HTML)
-
-
-async def cmd_stats(message: Message):
+async def show_stats(message: Message):
     if not is_admin(message.from_user.id):
         return
-    async with file_lock:
-        try:
-            if DATA_FILE.exists():
-                with DATA_FILE.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                count = len(data)
-                latest = data[-1]["timestamp"] if data else "нет"
-                await message.answer(f"📊 <b>Статистика:</b>\nВсего заявок: {count}\nПоследняя: {latest}", parse_mode=ParseMode.HTML)
-            else:
-                await message.answer("📊 Заявок: 0")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка: {e}")
 
-
-async def cmd_clear(message: Message):
-    if not is_admin(message.from_user.id):
-        return
+    records = []
     if DATA_FILE.exists():
-        DATA_FILE.unlink()
-        await message.answer("🗑️ <b>База очищена</b>", parse_mode=ParseMode.HTML)
-    else:
-        await message.answer("База пуста")
-
-
-async def cmd_broadcast(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-    if len(message.text.split()) < 2:
-        await message.answer("❌ /broadcast ТЕКСТ_СООБЩЕНИЯ")
-        return
-    
-    text = message.text.replace("/broadcast ", "", 1)
-    sent = 0
-    
-    for admin_id in ADMINS:
         try:
-            await bot.send_message(admin_id, f"📢 <b>Рассылка от админа:</b>\n\n{text}", parse_mode=ParseMode.HTML)
-            sent += 1
+            with DATA_FILE.open("r", encoding="utf-8") as f:
+                records = json.load(f)
         except:
             pass
-    
-    await message.answer(f"✅ Отправлено {sent}/{len(ADMINS)} админам")
+
+    total = len(records)
+    blocked_count = len(blocked_users)
+
+    await message.answer(
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"📝 Всего заявок: {total}\n"
+        f"🚫 Заблокировано пользователей: {blocked_count}",
+        parse_mode=ParseMode.HTML
+    )
 
 
-async def finish_and_send(message: Message, state: FSMContext):
-    global bot
-    data = await state.get_data()
-    
-    record = {
-        "user_id": message.from_user.id,
-        "username": message.from_user.username or "нет",
-        "full_name": data.get("full_name"),
-        "military_unit": data.get("military_unit"),
-        "company_battalion": data.get("company_battalion"),
-        "personal_number": data.get("personal_number"),
-        "room": data.get("room"),
-        "military_id": data.get("military_id"),
-        "lost_military_id_reason": data.get("lost_military_id_reason"),
-        "uvbd": data.get("uvbd"),
-        "salary": data.get("salary"),
-        "salary_problems": data.get("salary_problems"),
-        "contract_payments": data.get("contract_payments"),
-        "contract_problems": data.get("contract_problems"),
-        "more_questions": data.get("more_questions"),
-        "more_questions_details": data.get("more_questions_details"),
-        "phone_number": data.get("phone_number"),
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    form_no = await save_record(record)
-    
-    report = f"""🆘 <b>НОВАЯ ЗАЯВКА #{form_no}</b>
+async def export_data(message: Message):
+    if not is_admin(message.from_user.id):
+        return
 
-👤 <b>ФИО:</b> {record['full_name']}
-🏛️ <b>В/Ч:</b> {record['military_unit']}
-🎖️ <b>Рота/Батальон:</b> {record['company_battalion']}
-🆔 <b>Личный №:</b> {record['personal_number']}
-🏠 <b>Этаж/палата:</b> {record['room']}
+    if not DATA_FILE.exists():
+        await message.answer("❌ Нет данных для выгрузки")
+        return
 
-📄 <b>Военный билет:</b> {record['military_id']}
-{'' if record['military_id'] == '✅ Да' else f"📝 <b>Причина утраты:</b> {record['lost_military_id_reason']}"}
-
-📋 <b>УВБД:</b> {record['uvbd']}
-
-💰 <b>Денежное довольствие:</b> {record['salary']}
-{'' if record['salary'] == '✅ Да' else f"⚠️ <b>Проблемы:</b> {record['salary_problems']}"}
-
-💸 <b>Выплаты после контракта:</b> {record['contract_payments']}
-{'' if record['contract_payments'] == '✅ Да' else f"🔧 <b>Проблемы:</b> {record['contract_problems']}"}
-
-❓ <b>Имеются ли еще проблемные вопросы:</b> {record['more_questions']}
-{record['more_questions_details'] or ''}
-
-📞 <b>Телефон:</b> {record['phone_number']}
-
-🆔 <code>{record['user_id']}</code> | @{record['username']}
-⏰ {record['timestamp']}"""
-    
     try:
-        # Всем админам
-        for admin_id in ADMINS:
-            await bot.send_message(admin_id, report, parse_mode=ParseMode.HTML)
-            logger.info(f"Заявка #{form_no} отправлена админу {admin_id}")
-        
-        # В группу
-        group_report = f"📢 <b>Новая заявка #{form_no}</b>\n\n{report}"
-        await bot.send_message(chat_id=GROUP_CHAT_ID, text=group_report, parse_mode=ParseMode.HTML)
-        logger.info(f"Заявка #{form_no} отправлена в группу")
-        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_file = EXCEL_EXPORT_DIR / f"export_{timestamp}.csv"
+
+        with DATA_FILE.open("r", encoding="utf-8") as f:
+            records = json.load(f)
+
+        if not records:
+            await message.answer("❌ Нет данных для выгрузки")
+            return
+
+        with csv_file.open("w", encoding="utf-8-sig", newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=records[0].keys())
+            writer.writeheader()
+            writer.writerows(records)
+
+        await message.answer_document(
+            FSInputFile(csv_file),
+            caption="📥 Выгрузка данных"
+        )
+
+        csv_file.unlink()
+
     except Exception as e:
-        logger.error(f"Ошибка отправки: {e}")
-    
-    await message.answer("✅ <b>Спасибо! Заявка отправлена админам + в группу</b>", 
-                        reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.HTML)
+        logger.error(f"Ошибка экспорта: {e}")
+        await message.answer(f"❌ Ошибка экспорта: {e}")
+
+
+async def start_block_user(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.set_state(AdminStates.block_user)
+    await message.answer(
+        "Введите ID пользователя для блокировки:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+async def process_block_user(message: Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        if user_id in ADMINS:
+            await message.answer("❌ Нельзя заблокировать администратора!")
+            await state.clear()
+            return
+
+        blocked_users[user_id] = {
+            "blocked_at": datetime.now().isoformat(),
+            "blocked_by": message.from_user.id
+        }
+        save_blocked_users()
+
+        await message.answer(
+            f"✅ Пользователь {user_id} заблокирован",
+            reply_markup=admin_kb()
+        )
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Введите число:")
+        return
+
     await state.clear()
 
 
-async def save_record(record: dict) -> int:
-    async with file_lock:
-        try:
-            if DATA_FILE.exists():
-                with DATA_FILE.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if not isinstance(data, list):
-                        data = []
-            else:
-                data = []
-        except json.JSONDecodeError:
-            data = []
-        
-        data.append(record)
-        with DATA_FILE.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        
-        return len(data)
+async def start_unblock_user(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.set_state(AdminStates.unblock_user)
+    await message.answer(
+        "Введите ID пользователя для разблокировки:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+async def process_unblock_user(message: Message, state: FSMContext):
+    try:
+        user_id = int(message.text.strip())
+        if user_id in blocked_users:
+            del blocked_users[user_id]
+            save_blocked_users()
+            await message.answer(
+                f"✅ Пользователь {user_id} разблокирован",
+                reply_markup=admin_kb()
+            )
+        else:
+            await message.answer(
+                f"❌ Пользователь {user_id} не был заблокирован",
+                reply_markup=admin_kb()
+            )
+    except ValueError:
+        await message.answer("❌ Неверный формат ID. Введите число:")
+        return
+
+    await state.clear()
+
+
+async def show_blocked_list(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    if not blocked_users:
+        await message.answer("✅ Нет заблокированных пользователей")
+        return
+
+    text = "🚫 <b>Заблокированные пользователи:</b>\n\n"
+    for user_id, info in blocked_users.items():
+        blocked_at = datetime.fromisoformat(info['blocked_at']).strftime("%d.%m.%Y %H:%M")
+        text += f"• ID: {user_id}\n  Заблокирован: {blocked_at}\n\n"
+
+    await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 async def main():
     global bot
-    
+
+    load_blocked_users()
+
     bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage())
-    
-    # Регистрация
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+
+    # Регистрация хендлеров
     dp.message.register(cmd_start, CommandStart())
-    dp.message.register(cmd_cancel, Command("cancel"))
-    dp.message.register(cmd_help, Command("help"))
-    dp.message.register(cmd_stats, Command("stats"))
-    dp.message.register(cmd_clear, Command("clear"))
-    dp.message.register(cmd_broadcast, Command("broadcast"))
-    
-    dp.message.register(process_full_name, StateFilter(Survey.full_name))
-    dp.message.register(process_military_unit, StateFilter(Survey.military_unit))
-    dp.message.register(process_company_battalion, StateFilter(Survey.company_battalion))
-    dp.message.register(process_personal_number, StateFilter(Survey.personal_number))
-    dp.message.register(process_room, StateFilter(Survey.room))
-    dp.message.register(process_military_id, StateFilter(Survey.military_id))
-    dp.message.register(process_lost_military_id, StateFilter(Survey.lost_military_id_reason))
-    dp.message.register(process_uvbd, StateFilter(Survey.uvbd))
-    dp.message.register(process_salary, StateFilter(Survey.salary))
-    dp.message.register(process_salary_problems, StateFilter(Survey.salary_problems))
-    dp.message.register(process_contract_payments, StateFilter(Survey.contract_payments))
-    dp.message.register(process_contract_problems, StateFilter(Survey.contract_problems))
-    dp.message.register(process_more_questions, StateFilter(Survey.more_questions))
-    dp.message.register(process_more_questions_details, StateFilter(Survey.more_questions_details))
-    dp.message.register(process_phone_number, StateFilter(Survey.phone_number))
-    
-    logger.info("🚀 Бот запущен!")
-    print("🚀 Бот запущен! Админы:", ADMINS)
+    dp.message.register(start_survey, F.text == "🚀 Начать заявку")
+    dp.message.register(start_survey, F.text == "📤 Отправить заявку заново")
+
+    # Survey handlers
+    dp.message.register(process_full_name, Survey.full_name)
+    dp.message.register(process_military_unit, Survey.military_unit)
+    dp.message.register(process_company_battalion, Survey.company_battalion)
+    dp.message.register(process_personal_number, Survey.personal_number)
+    dp.message.register(process_room, Survey.room)
+    dp.message.register(process_military_id, Survey.military_id)
+    dp.message.register(process_lost_military_id_reason, Survey.lost_military_id_reason)
+    dp.message.register(process_veteran_certificate, Survey.veteran_certificate)
+    dp.message.register(process_salary, Survey.salary)
+    dp.message.register(process_salary_problems, Survey.salary_problems)
+    dp.message.register(process_contract_payments, Survey.contract_payments)
+    dp.message.register(process_contract_problems, Survey.contract_problems)
+    dp.message.register(process_more_questions, Survey.more_questions)
+    dp.message.register(process_more_questions_details, Survey.more_questions_details)
+    dp.message.register(process_phone_number, Survey.phone_number)
+
+    # Admin handlers
+    dp.message.register(show_stats, F.text == "📊 Статистика")
+    dp.message.register(export_data, F.text == "📥 Выгрузить данные")
+    dp.message.register(start_block_user, F.text == "🚫 Заблокировать пользователя")
+    dp.message.register(process_block_user, AdminStates.block_user)
+    dp.message.register(start_unblock_user, F.text == "✅ Разблокировать пользователя")
+    dp.message.register(process_unblock_user, AdminStates.unblock_user)
+    dp.message.register(show_blocked_list, F.text == "📋 Список заблокированных")
+
+    logger.info("Бот запущен")
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🛑 Остановлен")
-    except Exception as e:
-        print(f"❌ Ошибка: {e}")
+    asyncio.run(main())
